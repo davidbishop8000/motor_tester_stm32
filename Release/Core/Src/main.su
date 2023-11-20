@@ -1,0 +1,5 @@
+../Core/Src/main.c:64:9:unwrap_encoder	8	static
+../Core/Src/main.c:78:6:getEncoder	8	static
+../Core/Src/main.c:146:6:SystemClock_Config	72	static,ignoring_inline_asm
+../Core/Src/main.c:90:5:main	64	static,ignoring_inline_asm
+../Core/Src/main.c:312:6:Error_Handler	0	static,ignoring_inline_asm

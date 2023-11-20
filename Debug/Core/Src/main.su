@@ -1,0 +1,8 @@
+../Core/Src/main.c:64:9:unwrap_encoder	32	static
+../Core/Src/main.c:78:6:getEncoder	16	static
+../Core/Src/main.c:90:5:main	8	static
+../Core/Src/main.c:146:6:SystemClock_Config	72	static
+../Core/Src/main.c:186:13:MX_SPI1_Init	8	static
+../Core/Src/main.c:224:13:MX_TIM4_Init	56	static
+../Core/Src/main.c:273:13:MX_GPIO_Init	40	static
+../Core/Src/main.c:312:6:Error_Handler	4	static,ignoring_inline_asm
