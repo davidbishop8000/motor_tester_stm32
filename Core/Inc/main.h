@@ -63,8 +63,20 @@ void Error_Handler(void);
 #define OLED_Res_GPIO_Port GPIOB
 #define OLED_CS_Pin GPIO_PIN_1
 #define OLED_CS_GPIO_Port GPIOB
+#define BUTTON1_Pin GPIO_PIN_12
+#define BUTTON1_GPIO_Port GPIOB
+#define BUTTON2_Pin GPIO_PIN_13
+#define BUTTON2_GPIO_Port GPIOB
+#define BUTTON3_Pin GPIO_PIN_14
+#define BUTTON3_GPIO_Port GPIOB
+#define BUTTON4_Pin GPIO_PIN_15
+#define BUTTON4_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
+#define ENC_ONE_PERIOD 65536
+#define ENC_HALF_PERIOD 32768
+
+void rcGetBattery();
 int32_t unwrap_encoder(uint16_t in, int32_t *prev);
 /* USER CODE END Private defines */
 

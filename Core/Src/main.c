@@ -47,6 +47,9 @@ SPI_HandleTypeDef hspi1;
 
 TIM_HandleTypeDef htim4;
 
+UART_HandleTypeDef huart1;
+DMA_HandleTypeDef hdma_usart1_rx;
+
 /* USER CODE BEGIN PV */
 int32_t enc_prev = 0;
 int32_t enc_idle_tick = 0;
@@ -55,15 +58,325 @@ int32_t enc_idle_tick = 0;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_TIM4_Init(void);
 static void MX_CAN_Init(void);
+static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
+
+uint8_t bms_uart_buff[100];
+uint8_t new_bms_data = 0;
+
+uint8_t bms_detected = 0;
+uint8_t smart_bms = 0;
+
+uint8_t bms_jbd_request_msg0[] = {0xDD, 0xA5, 0x03, 0x00, 0xFF, 0xFD, 0x77};
+uint8_t bms_jbd_request_msg1[] = {0xDD, 0xA5, 0x04, 0x00, 0xFF, 0xFC, 0x77};
+uint8_t bms_smart_request_msg[]  = {0xA5, 0x40, 0x90, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7D};
+int32_t bms_req_time = 0;
+int32_t battery_capacity = 0;
+uint8_t bms_err = 0;
+
+typedef struct {
+	uint8_t start_msg0;
+	uint8_t start_msg1;
+	uint8_t shuttle_id;
+	uint8_t msg_id;
+
+	uint16_t voltage;
+	int16_t current;
+
+	uint32_t remaining_capacity;
+	uint16_t nominal_capacity;
+	uint16_t n0;
+
+	uint16_t cycles;
+	uint16_t date;
+	uint16_t balance_low;
+	uint16_t balance_high;
+
+	uint16_t protection;
+	uint16_t capacity_percent;
+
+	uint8_t version;
+	uint8_t MOS_state;
+	uint8_t num_of_battery;
+	uint8_t num_of_NTC;
+
+	uint16_t temp1;
+	uint16_t temp2;
+
+	uint8_t battery_pack;
+	uint8_t p0;
+	uint8_t p1;
+	uint8_t p2;
+
+	uint16_t max_volt;
+	uint16_t min_volt;
+
+	uint16_t cell_0;
+	uint16_t cell_1;
+	uint16_t cell_2;
+	uint16_t cell_3;
+	uint16_t cell_4;
+	uint16_t cell_5;
+	uint16_t cell_6;
+	uint16_t cell_7;
+	uint16_t cell_8;
+	uint16_t cell_9;
+	uint16_t cell_10;
+	uint16_t cell_11;
+	uint16_t cell_12;
+	uint16_t cell_13;
+	uint16_t cell_14;
+	uint16_t cell_15;
+	uint8_t bms_type; //0-jbd, 1-smart
+	uint8_t reservz1;
+	uint8_t reservz2;
+	uint8_t CS;
+} BatteryMsgTypeDef;
+
+typedef struct {
+	GPIO_TypeDef *button_port;
+	uint16_t button_pin;
+	uint8_t short_state;
+	uint8_t long_state;
+	uint32_t time_key;
+} StButtonsTypeDef;
+
+enum BMS_TYPE {
+	BMS_NONE = 0,
+	BMS_SMART,
+	BMS_JBD,
+	BMS_MAX,
+};
+
+BatteryMsgTypeDef batteryMsg;
+StButtonsTypeDef stButtons[4];
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+	uint32_t er = HAL_UART_GetError(huart);
+	switch (er) {
+		case HAL_UART_ERROR_PE: // ошибка четности
+			__HAL_UART_CLEAR_PEFLAG(huart);
+			huart->ErrorCode = HAL_UART_ERROR_NONE;
+			break;
+		case HAL_UART_ERROR_NE:  // шум на линии
+			__HAL_UART_CLEAR_NEFLAG(huart);
+			huart->ErrorCode = HAL_UART_ERROR_NONE;
+			break;
+		case HAL_UART_ERROR_FE:  // ошибка фрейма
+			__HAL_UART_CLEAR_FEFLAG(huart);
+			huart->ErrorCode = HAL_UART_ERROR_NONE;
+			break;
+		case HAL_UART_ERROR_ORE:  // overrun error
+			__HAL_UART_CLEAR_OREFLAG(huart);
+			huart->ErrorCode = HAL_UART_ERROR_NONE;
+			break;
+		case HAL_UART_ERROR_DMA:  // ошибка DMA
+			huart->ErrorCode = HAL_UART_ERROR_NONE;
+			break;
+		default:
+			break;
+		}
+	if (huart->Instance == USART1) {
+		new_bms_data = 1;
+		HAL_UARTEx_ReceiveToIdle_DMA(&huart, bms_uart_buff, sizeof(bms_uart_buff));
+		__HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
+	}
+}
+
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
+	if (huart->Instance == USART1) {
+		new_bms_data = 1;
+		HAL_UARTEx_ReceiveToIdle_DMA(&huart, bms_uart_buff, sizeof(bms_uart_buff));
+		__HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
+	}
+}
+
+
+void get_bms_data()
+{
+	if (!bms_detected) {
+		HAL_UART_Transmit(&huart1, (uint8_t*)bms_smart_request_msg, sizeof(bms_smart_request_msg), 100);
+		bms_detected = 1;
+	}
+	else {
+		if (smart_bms) HAL_UART_Transmit(&huart1, (uint8_t*)bms_smart_request_msg, sizeof(bms_smart_request_msg), 100);
+		else HAL_UART_Transmit(&huart1, (uint8_t*)bms_jbd_request_msg0, sizeof(bms_jbd_request_msg0), 100);
+	}
+	bms_req_time = HAL_GetTick();
+	bms_err++;
+	if (bms_err>5) {
+		battery_capacity = 0;
+		bms_detected = 0;
+	}
+}
+void read_bms_uart() {
+	if (new_bms_data)
+	{
+		new_bms_data = 0;
+		bms_err = 0;
+
+		rcGetBattery();
+	}
+}
+
+void rcGetBattery() {
+	if (bms_uart_buff[0] == 0xDD) smart_bms = 0;
+	else if (bms_uart_buff[0] == 0xA5) smart_bms = 1;
+	if (smart_bms)
+	{
+		uint8_t battery_comm = bms_uart_buff[2];
+		if (battery_comm == 0x90)
+		{
+			batteryMsg.bms_type = BMS_SMART;
+
+			batteryMsg.voltage = (bms_uart_buff[4] << 8) + bms_uart_buff[5];
+			batteryMsg.current = (bms_uart_buff[8] << 8) + bms_uart_buff[9];
+			batteryMsg.capacity_percent = (bms_uart_buff[10] << 8) + bms_uart_buff[11];
+			battery_capacity = batteryMsg.capacity_percent/10;
+		}
+		else if (battery_comm == 0x91)
+		{
+			batteryMsg.max_volt = (bms_uart_buff[4] << 8) + bms_uart_buff[5];
+			batteryMsg.min_volt = (bms_uart_buff[7] << 8) + bms_uart_buff[8];
+		}
+		else if (battery_comm == 0x92)
+		{
+
+		}
+		else if (battery_comm == 0x93)
+		{
+			batteryMsg.remaining_capacity = (bms_uart_buff[8] << 24) +(bms_uart_buff[9] << 16) +(bms_uart_buff[10] << 8) + bms_uart_buff[11];
+		}
+		else if (battery_comm == 0x94)
+		{
+			batteryMsg.num_of_battery = bms_uart_buff[4];
+			batteryMsg.num_of_NTC = bms_uart_buff[5];
+		}
+		else if (battery_comm == 0x95)
+		{
+			if (bms_uart_buff[4] == 0x01)
+			{
+				batteryMsg.cell_0 = (bms_uart_buff[5] << 8) + bms_uart_buff[6];
+				batteryMsg.cell_1 = (bms_uart_buff[7] << 8) + bms_uart_buff[8];
+				batteryMsg.cell_2 = (bms_uart_buff[9] << 8) + bms_uart_buff[10];
+			}
+			else if (bms_uart_buff[4] == 0x02)
+			{
+				batteryMsg.cell_3 = (bms_uart_buff[5] << 8) + bms_uart_buff[6];
+				batteryMsg.cell_4 = (bms_uart_buff[7] << 8) + bms_uart_buff[8];
+				batteryMsg.cell_5 = (bms_uart_buff[9] << 8) + bms_uart_buff[10];
+				//batteryMsg.cell_3 = (bms_uart_buff[18] << 8) + bms_uart_buff[19];
+				//batteryMsg.cell_4 = (bms_uart_buff[20] << 8) + bms_uart_buff[21];
+				//batteryMsg.cell_5 = (bms_uart_buff[22] << 8) + bms_uart_buff[23];
+			}
+			else if (bms_uart_buff[4] == 0x03)
+			{
+				batteryMsg.cell_6 = (bms_uart_buff[5] << 8) + bms_uart_buff[6];
+				batteryMsg.cell_7 = (bms_uart_buff[7] << 8) + bms_uart_buff[8];
+				batteryMsg.cell_8 = (bms_uart_buff[9] << 8) + bms_uart_buff[10];
+				//batteryMsg.cell_6 = (bms_uart_buff[27] << 8) + bms_uart_buff[28];
+				//batteryMsg.cell_7 = (bms_uart_buff[29] << 8) + bms_uart_buff[30];
+				//batteryMsg.cell_8 = (bms_uart_buff[31] << 8) + bms_uart_buff[32];
+			}
+			else if (bms_uart_buff[4] == 0x04)
+			{
+				batteryMsg.cell_9 = (bms_uart_buff[5] << 8) + bms_uart_buff[6];
+				batteryMsg.cell_10 = (bms_uart_buff[7] << 8) + bms_uart_buff[8];
+				batteryMsg.cell_11 = (bms_uart_buff[9] << 8) + bms_uart_buff[10];
+				//batteryMsg.cell_9 = (bms_uart_buff[34] << 8) + bms_uart_buff[35];
+				//batteryMsg.cell_10 = (bms_uart_buff[36] << 8) + bms_uart_buff[37];
+				//batteryMsg.cell_11 = (bms_uart_buff[38] << 8) + bms_uart_buff[39];
+			}
+			else if (bms_uart_buff[4] == 0x05)
+			{
+				batteryMsg.cell_12 = (bms_uart_buff[5] << 8) + bms_uart_buff[6];
+				batteryMsg.cell_13 = (bms_uart_buff[7] << 8) + bms_uart_buff[8];
+				batteryMsg.cell_14 = (bms_uart_buff[9] << 8) + bms_uart_buff[10];
+				//batteryMsg.cell_12 = (bms_uart_buff[40] << 8) + bms_uart_buff[41];
+				//batteryMsg.cell_13 = (bms_uart_buff[42] << 8) + bms_uart_buff[43];
+				//batteryMsg.cell_14 = (bms_uart_buff[44] << 8) + bms_uart_buff[45];
+			}
+			else if (bms_uart_buff[4] == 0x06)
+			{
+				batteryMsg.cell_15 = (bms_uart_buff[5] << 8) + bms_uart_buff[6];
+				//batteryMsg.cell_15 = (bms_uart_buff[47] << 8) + bms_uart_buff[48];
+			}
+			bms_smart_request_msg[2] = 0x95;
+			bms_smart_request_msg[12] = 0x82;
+		}
+		else if (battery_comm == 0x96)
+		{
+			batteryMsg.temp1 = bms_uart_buff[5]; //-40 to convert
+			batteryMsg.temp2 = bms_uart_buff[6];
+		}
+		bms_smart_request_msg[2]++;
+		bms_smart_request_msg[12]++;
+		if (bms_smart_request_msg[2] > 0x96)
+		{
+			bms_smart_request_msg[2] = 0x90;
+			bms_smart_request_msg[12] = 0x7D;
+		}
+	}
+	else
+	{
+		uint8_t battery_comm = bms_uart_buff[1];
+		if (battery_comm == 0x03)
+		{
+			batteryMsg.bms_type = BMS_JBD;
+			batteryMsg.voltage = (bms_uart_buff[4] << 8) + bms_uart_buff[5];
+			//batteryMsg.current = 65536 - ((bms_uart_buff[6] << 8) + bms_uart_buff[7]);
+			//if (bms_uart_buff[6] & (1 << 8)) batteryMsg.current = -batteryMsg.current;
+			batteryMsg.current = 0;//(bms_uart_buff[6] << 8) + bms_uart_buff[7];
+			batteryMsg.remaining_capacity = (uint32_t)((bms_uart_buff[8] << 8) + bms_uart_buff[9]);
+			batteryMsg.nominal_capacity = (bms_uart_buff[10] << 8) + bms_uart_buff[11];
+			batteryMsg.cycles = (bms_uart_buff[12] << 8) + bms_uart_buff[13];
+			batteryMsg.date = (bms_uart_buff[14] << 8) + bms_uart_buff[15];
+			batteryMsg.balance_low = (bms_uart_buff[16] << 8) + bms_uart_buff[17];
+			batteryMsg.balance_high = (bms_uart_buff[18] << 8) + bms_uart_buff[19];
+			batteryMsg.protection = (bms_uart_buff[20] << 8) + bms_uart_buff[21];
+			batteryMsg.version = bms_uart_buff[22];
+			batteryMsg.capacity_percent = (uint16_t)bms_uart_buff[23];
+			batteryMsg.MOS_state = bms_uart_buff[24];
+			batteryMsg.num_of_battery = bms_uart_buff[25];
+			batteryMsg.num_of_NTC = bms_uart_buff[26];
+			batteryMsg.temp1 = ((bms_uart_buff[27] << 8) + bms_uart_buff[28]);
+			batteryMsg.temp2 = ((bms_uart_buff[29] << 8) + bms_uart_buff[30]);
+
+			HAL_UART_Transmit(&huart1, (uint8_t*)bms_jbd_request_msg1, sizeof(bms_jbd_request_msg1), 100);
+		}
+		else if (battery_comm == 0x04)
+		{
+			batteryMsg.battery_pack = bms_uart_buff[3];
+			batteryMsg.cell_0 = (bms_uart_buff[4] << 8) + bms_uart_buff[5];
+			batteryMsg.cell_1 = (bms_uart_buff[6] << 8) + bms_uart_buff[7];
+			batteryMsg.cell_2 = (bms_uart_buff[8] << 8) + bms_uart_buff[9];
+			batteryMsg.cell_3 = (bms_uart_buff[10] << 8) + bms_uart_buff[11];
+			batteryMsg.cell_4 = (bms_uart_buff[12] << 8) + bms_uart_buff[13];
+			batteryMsg.cell_5 = (bms_uart_buff[14] << 8) + bms_uart_buff[15];
+			batteryMsg.cell_6 = (bms_uart_buff[16] << 8) + bms_uart_buff[17];
+			batteryMsg.cell_7 = (bms_uart_buff[18] << 8) + bms_uart_buff[19];
+			batteryMsg.cell_8 = (bms_uart_buff[20] << 8) + bms_uart_buff[21];
+			batteryMsg.cell_9 = (bms_uart_buff[22] << 8) + bms_uart_buff[23];
+			batteryMsg.cell_10 = (bms_uart_buff[24] << 8) + bms_uart_buff[25];
+			batteryMsg.cell_11 = (bms_uart_buff[26] << 8) + bms_uart_buff[27];
+			batteryMsg.cell_12 = (bms_uart_buff[28] << 8) + bms_uart_buff[29];
+			batteryMsg.cell_13 = (bms_uart_buff[30] << 8) + bms_uart_buff[31];
+			batteryMsg.cell_14 = (bms_uart_buff[32] << 8) + bms_uart_buff[33];
+			batteryMsg.cell_15 = (bms_uart_buff[34] << 8) + bms_uart_buff[35];
+		}
+	}
+}
+
 int32_t unwrap_encoder(uint16_t in, int32_t *prev)
 {
     int32_t c32 = (int32_t)in - ENC_HALF_PERIOD;
@@ -78,11 +391,57 @@ int32_t unwrap_encoder(uint16_t in, int32_t *prev)
 
     return unwrapped + ENC_HALF_PERIOD;
 }
+
 void getEncoder()
 {
 	int currCounter = __HAL_TIM_GET_COUNTER(&htim4);
 	enc_idle_tick = unwrap_encoder(currCounter, &enc_prev);
+}
 
+void buttons_Init()
+{
+	stButtons[0].button_port = BUTTON1_GPIO_Port;
+	stButtons[0].button_pin = BUTTON1_Pin;
+	stButtons[1].button_port = BUTTON2_GPIO_Port;
+	stButtons[1].button_pin = BUTTON2_Pin;
+	stButtons[2].button_port = BUTTON3_GPIO_Port;
+	stButtons[2].button_pin = BUTTON3_Pin;
+	stButtons[3].button_port = BUTTON4_GPIO_Port;
+	stButtons[3].button_pin = BUTTON4_Pin;
+}
+
+uint8_t short_state = 0;
+uint8_t long_state = 0;
+uint32_t time_key1 = 0;
+
+void getButton()
+{
+	for (int i=0; i<4; i++)
+	{
+		uint32_t ms = HAL_GetTick();
+		uint8_t key_state = HAL_GPIO_ReadPin(stButtons[i].button_port, stButtons[i].button_pin);
+		if(key_state == 0 && !stButtons[i].short_state && (ms - stButtons[i].time_key) > 50)
+		{
+			stButtons[i].short_state = 1;
+			stButtons[i].long_state = 0;
+			stButtons[i].time_key = ms;
+		}
+		else if(key_state == 0 && !stButtons[i].long_state && (ms - stButtons[i].time_key) > 2000)
+		{
+			stButtons[i].long_state = 1;
+		  //long press
+		}
+		else if(key_state == 1 && stButtons[i].short_state && (ms - stButtons[i].time_key) > 50)
+		{
+			stButtons[i].short_state = 0;
+			stButtons[i].time_key = ms;
+
+		  if(!stButtons[i].long_state)
+		  {
+			//short press
+		  }
+		}
+	}
 }
 /* USER CODE END 0 */
 
@@ -114,11 +473,14 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_SPI1_Init();
   MX_TIM4_Init();
   MX_CAN_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   ssd1306_Init();
+  buttons_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -307,6 +669,55 @@ static void MX_TIM4_Init(void)
 }
 
 /**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel5_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel5_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -338,6 +749,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : BUTTON1_Pin BUTTON2_Pin BUTTON3_Pin BUTTON4_Pin */
+  GPIO_InitStruct.Pin = BUTTON1_Pin|BUTTON2_Pin|BUTTON3_Pin|BUTTON4_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
 }
