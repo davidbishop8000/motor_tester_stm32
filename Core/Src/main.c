@@ -396,6 +396,12 @@ void getEncoder()
 {
 	int currCounter = __HAL_TIM_GET_COUNTER(&htim4);
 	enc_idle_tick = unwrap_encoder(currCounter, &enc_prev);
+	char str [12];
+	snprintf(str, sizeof str, "%d", (int)enc_idle_tick);
+	ssd1306_Fill(Black);
+	ssd1306_SetCursor(2, 3);
+	ssd1306_WriteString(str, Font_16x26, White);
+	ssd1306_UpdateScreen();
 }
 
 void buttons_Init()
@@ -426,10 +432,16 @@ void getButton()
 			stButtons[i].long_state = 0;
 			stButtons[i].time_key = ms;
 		}
-		else if(key_state == 0 && !stButtons[i].long_state && (ms - stButtons[i].time_key) > 2000)
+		else if(key_state == 0 && !stButtons[i].long_state && (ms - stButtons[i].time_key) > 1000)
 		{
 			stButtons[i].long_state = 1;
 		  //long press
+			ssd1306_SetCursor(2, 2);
+			ssd1306_Fill(Black);
+			ssd1306_WriteString("Long", Font_16x26, White);
+			ssd1306_SetCursor(2, 30);
+			ssd1306_WriteChar((char)(i+49), Font_16x26, White);
+			ssd1306_UpdateScreen();
 		}
 		else if(key_state == 1 && stButtons[i].short_state && (ms - stButtons[i].time_key) > 50)
 		{
@@ -439,6 +451,12 @@ void getButton()
 		  if(!stButtons[i].long_state)
 		  {
 			//short press
+			 ssd1306_SetCursor(2, 2);
+			 ssd1306_Fill(Black);
+			 ssd1306_WriteString("Short", Font_16x26, White);
+			 ssd1306_SetCursor(2, 30);
+			 ssd1306_WriteChar((char)(i+49), Font_16x26, White);
+			 ssd1306_UpdateScreen();
 		  }
 		}
 	}
@@ -479,25 +497,34 @@ int main(void)
   MX_CAN_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
   ssd1306_Init();
   buttons_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  ssd1306_SetCursor(2, 2);
+  ssd1306_Fill(Black);
+  ssd1306_WriteString("Start...", Font_16x26, White);
+  ssd1306_UpdateScreen();
 
   while (1)
   {
-	ssd1306_SetCursor(2, 2);
-	ssd1306_Fill(Black);
-	ssd1306_WriteString("Start...", Font_16x26, White);
-	ssd1306_UpdateScreen();
-  	HAL_Delay(1500);
-  	ssd1306_SetCursor(2, 20);
-  	ssd1306_Fill(Black);
-  	ssd1306_WriteString("Stop...", Font_16x26, White);
-  	ssd1306_UpdateScreen();
-  	HAL_Delay(1500);
+	  getButton();
+	  getEncoder();
+	  /*
+		ssd1306_SetCursor(2, 2);
+		ssd1306_Fill(Black);
+		ssd1306_WriteString("Start...", Font_16x26, White);
+		ssd1306_UpdateScreen();
+		HAL_Delay(1500);
+		ssd1306_SetCursor(2, 20);
+		ssd1306_Fill(Black);
+		ssd1306_WriteString("Stop...", Font_16x26, White);
+		ssd1306_UpdateScreen();
+		HAL_Delay(1500);
+	*/
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
