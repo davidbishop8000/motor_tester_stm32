@@ -77,7 +77,7 @@ main-build: motor_tester_stm32.elf secondary-outputs
 
 # Tool invocations
 motor_tester_stm32.elf motor_tester_stm32.map: $(OBJS) $(USER_OBJS) C:\ST_proj\motor_tester_stm32\STM32F103C8TX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-g++ -o "motor_tester_stm32.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m3 -T"C:\ST_proj\motor_tester_stm32\STM32F103C8TX_FLASH.ld" --specs=nosys.specs -Wl,-Map="motor_tester_stm32.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -lstdc++ -lsupc++ -Wl,--end-group
+	arm-none-eabi-g++ -o "motor_tester_stm32.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m3 -T"C:\ST_proj\motor_tester_stm32\STM32F103C8TX_FLASH.ld" --specs=nosys.specs -Wl,-Map="motor_tester_stm32.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -u _printf_float -Wl,--start-group -lc -lm -lstdc++ -lsupc++ -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

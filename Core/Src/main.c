@@ -59,10 +59,10 @@ int32_t enc_idle_tick = 0;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
-static void MX_SPI1_Init(void);
-static void MX_TIM4_Init(void);
-static void MX_CAN_Init(void);
 static void MX_USART1_UART_Init(void);
+static void MX_TIM4_Init(void);
+static void MX_SPI1_Init(void);
+static void MX_CAN_Init(void);
 /* USER CODE BEGIN PFP */
 
 #define DRIVER_MOVE_ID 0x01
@@ -376,13 +376,25 @@ void Moving() {
 void get_bms_data()
 {
 	if (!bms_detected) {
+		RE_DE_ON;
 		//HAL_UART_Transmit(&huart1, (uint8_t*)bms_smart_request_msg, sizeof(bms_smart_request_msg), 100);
 		HAL_UART_Transmit(&huart1, (uint8_t*)bms_jbd_request_msg0, sizeof(bms_jbd_request_msg0), 100);
+		RE_DE_OFF;
 		bms_detected = 1;
 	}
 	else {
-		if (smart_bms) HAL_UART_Transmit(&huart1, (uint8_t*)bms_smart_request_msg, sizeof(bms_smart_request_msg), 100);
-		else HAL_UART_Transmit(&huart1, (uint8_t*)bms_jbd_request_msg0, sizeof(bms_jbd_request_msg0), 100);
+		if (smart_bms)
+		{
+			RE_DE_ON;
+			HAL_UART_Transmit(&huart1, (uint8_t*)bms_smart_request_msg, sizeof(bms_smart_request_msg), 100);
+			RE_DE_OFF;
+		}
+		else
+		{
+			RE_DE_ON;
+			HAL_UART_Transmit(&huart1, (uint8_t*)bms_jbd_request_msg0, sizeof(bms_jbd_request_msg0), 100);
+			RE_DE_OFF;
+		}
 	}
 	bms_req_time = HAL_GetTick();
 }
@@ -392,13 +404,24 @@ void read_bms_uart() {
 		new_bms_data = 0;
 		//bms_err = 0;
 		rcGetBattery();
+		bms_detected = 1;
+		bms_req_time = HAL_GetTick();
 	}
-	if (bms_detected && batteryMsg.bms_type == BMS_NONE)
+	if (bms_detected == 1 && batteryMsg.bms_type == BMS_NONE)
 	{
 		if (HAL_GetTick() - bms_req_time > 1000) {
 			bms_req_time = HAL_GetTick();
+			RE_DE_ON;
 			HAL_UART_Transmit(&huart1, (uint8_t*)bms_smart_request_msg, sizeof(bms_smart_request_msg), 100);
-			bms_detected = 0;
+			RE_DE_OFF;
+			bms_detected++;
+		}
+	}
+	else if (bms_detected == 2 && batteryMsg.bms_type == BMS_NONE)
+	{
+		if (HAL_GetTick() - bms_req_time > 1000) {
+			bms_req_time = HAL_GetTick();
+			bms_detected = 3;
 		}
 	}
 }
@@ -526,8 +549,9 @@ void rcGetBattery() {
 			batteryMsg.temp1 = ((bms_uart_buff[27] << 8) + bms_uart_buff[28]);
 			batteryMsg.temp2 = ((bms_uart_buff[29] << 8) + bms_uart_buff[30]);
 			battery_capacity = batteryMsg.capacity_percent;
-
+			RE_DE_ON;
 			HAL_UART_Transmit(&huart1, (uint8_t*)bms_jbd_request_msg1, sizeof(bms_jbd_request_msg1), 100);
+			RE_DE_OFF;
 		}
 		else if (battery_comm == 0x04)
 		{
@@ -630,6 +654,9 @@ void getButton()
 			  {
 				  if (i == 0)
 				  {
+					  bms_detected = 0;
+					  batteryMsg.bms_type = BMS_NONE;
+					  bms_req_time = HAL_GetTick();
 					  get_bms_data();
 				  }
 			  }
@@ -679,6 +706,18 @@ void menu_update()
 			ssd1306_SetCursor(2, 53);
 			ssd1306_WriteString("to select", Font_7x10, White);
 		}
+		//////debug////////////
+		/*if (new_bms_data)
+		{
+			new_bms_data = 0;
+			static int x = 0;
+			x++;
+			char xx [8];
+			snprintf(xx, sizeof xx, "%d", (int)x);
+			ssd1306_SetCursor(2, 18);
+			ssd1306_WriteString(xx, Font_16x26, Black);
+		}
+		*/
 	}
 	else if (curr_menu == MENU_BMS)
 	{
@@ -690,6 +729,13 @@ void menu_update()
 			ssd1306_WriteString("Press OK", Font_7x10, White);
 			ssd1306_SetCursor(2, 53);
 			ssd1306_WriteString("to start test", Font_7x10, White);
+		}
+		else if (bms_detected == 3)
+		{
+			ssd1306_SetCursor(2, 42);
+			ssd1306_WriteString("Error!", Font_7x10, White);
+			ssd1306_SetCursor(2, 53);
+			ssd1306_WriteString("no bms data", Font_7x10, White);
 		}
 		else
 		{
@@ -708,6 +754,11 @@ void menu_update()
 				{
 					ssd1306_WriteString("JBD", Font_11x18, White);
 				}
+				char str_volt [8];
+				//snprintf(str_volt, sizeof str_volt, "%+6.*f", 2, batteryMsg.voltage);
+				snprintf(str_volt, sizeof str_volt, "%d %s", batteryMsg.voltage, "V");
+				ssd1306_SetCursor(90, 45);
+				ssd1306_WriteString(str_volt, Font_7x10, White);
 			}
 			else
 			{
@@ -800,10 +851,10 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_SPI1_Init();
-  MX_TIM4_Init();
-  MX_CAN_Init();
   MX_USART1_UART_Init();
+  MX_TIM4_Init();
+  MX_SPI1_Init();
+  MX_CAN_Init();
   /* USER CODE BEGIN 2 */
   HAL_UARTEx_ReceiveToIdle_DMA(&huart1, bms_uart_buff, sizeof(bms_uart_buff));
   __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
@@ -814,11 +865,15 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  ssd1306_SetCursor(2, 2);
-  ssd1306_Fill(Black);
-  ssd1306_WriteString("Start...", Font_16x26, White);
+  ssd1306_SetCursor(18, 2);
+  ssd1306_Fill(White);
+  ssd1306_WriteString("Universal", Font_11x18, Black);
+  ssd1306_SetCursor(18, 25);
+  ssd1306_WriteString("Tester", Font_16x24, Black);
+  ssd1306_SetCursor(16, 56);
+  ssd1306_WriteString("@Skynet 2024 v.1.0", Font_6x8, Black);
   ssd1306_UpdateScreen();
-
+  HAL_Delay(500);
   while (1)
   {
 	  getButton();
@@ -1087,15 +1142,26 @@ static void MX_GPIO_Init(void)
   GPIO_InitTypeDef GPIO_InitStruct = {0};
 
   /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(RE_DE_GPIO_Port, RE_DE_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(OLED_DC_GPIO_Port, OLED_DC_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, OLED_Res_Pin|OLED_CS_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : RE_DE_Pin */
+  GPIO_InitStruct.Pin = RE_DE_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(RE_DE_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : OLED_DC_Pin */
   GPIO_InitStruct.Pin = OLED_DC_Pin;
