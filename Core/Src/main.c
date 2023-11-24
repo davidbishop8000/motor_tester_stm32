@@ -65,6 +65,9 @@ static void MX_CAN_Init(void);
 static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
+#define DRIVER_MOVE_ID 0x01
+#define DRIVER_LIFT_ID 0x02
+
 uint8_t bms_uart_buff[100];
 uint8_t new_bms_data = 0;
 
@@ -74,9 +77,25 @@ uint8_t smart_bms = 0;
 uint8_t bms_jbd_request_msg0[] = {0xDD, 0xA5, 0x03, 0x00, 0xFF, 0xFD, 0x77};
 uint8_t bms_jbd_request_msg1[] = {0xDD, 0xA5, 0x04, 0x00, 0xFF, 0xFC, 0x77};
 uint8_t bms_smart_request_msg[]  = {0xA5, 0x40, 0x90, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7D};
-int32_t bms_req_time = 0;
+uint32_t bms_req_time = 0;
 int32_t battery_capacity = 0;
 uint8_t bms_err = 0;
+
+int32_t start_stop = 0;
+int32_t motor_speed = 0;
+
+CAN_TxHeaderTypeDef TxHeader;
+CAN_RxHeaderTypeDef RxHeader;
+uint8_t TxData[8] = {0,};
+uint8_t RxData[8] = {0,};
+uint32_t TxMailbox = 0;
+volatile uint8_t NewCanMsg = 0;
+
+enum CanGetMsgStatus {
+	CAN_GET_MSG_WAIT					=  0,
+	CAN_GET_MSG_OK                      =  1,
+	CAN_GET_MSG_ERROR                   =  2,
+};
 
 typedef struct {
 	uint8_t start_msg0;
@@ -152,6 +171,30 @@ enum BMS_TYPE {
 	BMS_MAX,
 };
 
+enum MENU {
+	MENU_ENC = 0,
+	MENU_BMS,
+	MENU_DRIVER,
+	MENU_MAX,
+};
+
+typedef struct {
+	int32_t encoder;
+	float voltage;
+} CanDataRecvTypeDef;
+
+typedef struct {
+	uint32_t canId;
+	uint32_t canExtId;
+	uint32_t canRTR;
+	uint8_t canData[8];
+} CanDataSendTypeDef;
+
+//CanDataRecvTypeDef canDataRecv;
+//CanDataSendTypeDef prevCanData;
+
+int curr_menu = 0;
+
 BatteryMsgTypeDef batteryMsg;
 StButtonsTypeDef stButtons[4];
 
@@ -188,7 +231,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 		}
 	if (huart->Instance == USART1) {
 		new_bms_data = 1;
-		HAL_UARTEx_ReceiveToIdle_DMA(&huart, bms_uart_buff, sizeof(bms_uart_buff));
+		HAL_UARTEx_ReceiveToIdle_DMA(&huart1, bms_uart_buff, sizeof(bms_uart_buff));
 		__HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
 	}
 }
@@ -196,16 +239,145 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
 	if (huart->Instance == USART1) {
 		new_bms_data = 1;
-		HAL_UARTEx_ReceiveToIdle_DMA(&huart, bms_uart_buff, sizeof(bms_uart_buff));
+		HAL_UARTEx_ReceiveToIdle_DMA(&huart1, bms_uart_buff, sizeof(bms_uart_buff));
 		__HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
 	}
 }
 
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
+{
+	if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, RxData) != HAL_OK)
+	{
+		Error_Handler();
+	}
+	NewCanMsg = CAN_GET_MSG_OK;
+}
+void HAL_CAN_ErrorCallback(CAN_HandleTypeDef *hcan)
+{
+    NewCanMsg = CAN_GET_MSG_ERROR;
+}
+
+uint8_t CanMsgRead(CanDataRecvTypeDef *canDataRecv) {
+
+	return 1;
+}
+
+
+uint8_t CanMsgSend(CanDataSendTypeDef *canDataSend) {
+
+	TxHeader.StdId = canDataSend->canId;
+	TxHeader.ExtId = canDataSend->canExtId;
+	TxHeader.RTR = canDataSend->canRTR;
+	TxHeader.IDE = CAN_ID_EXT;
+	TxHeader.DLC = 8;
+	TxHeader.TransmitGlobalTime = 0;
+	//globData.can_mutex = 0;
+	for (int i = 0; i < sizeof(TxData); i++) {
+		TxData[i] = canDataSend->canData[i];
+	}
+	while (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0);
+	if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) != HAL_OK) {
+		//HAL_UART_Transmit(&huart, (uint8_t*) "no_trans\r\n", 10, 100);
+		return 0;
+	}
+	return 1;
+}
+
+void Moving() {
+
+	CanDataSendTypeDef canDataSend;
+
+	static int move_axis_en = 0;
+	static int lift_axis_en = 0;
+	if (start_stop) {
+			canDataSend.canExtId = DRIVER_MOVE_ID + 0x06000000;
+			canDataSend.canRTR = CAN_RTR_DATA;
+			if (!move_axis_en) {
+				move_axis_en = 1;
+				canDataSend.canData[0] = 0x23;
+				canDataSend.canData[1] = 0x0D;
+				canDataSend.canData[2] = 0x20;
+				canDataSend.canData[3] = 0x01;
+				canDataSend.canData[4] = 0x00;
+				canDataSend.canData[5] = 0x00;
+				canDataSend.canData[6] = 0x00;
+				canDataSend.canData[7] = 0x00;
+				CanMsgSend(&canDataSend);
+				HAL_Delay(10);
+			}
+			if (!lift_axis_en) {
+				lift_axis_en = 1;
+				canDataSend.canData[0] = 0x23;
+				canDataSend.canData[1] = 0x0D;
+				canDataSend.canData[2] = 0x20;
+				canDataSend.canData[3] = 0x02;
+				canDataSend.canData[4] = 0x00;
+				canDataSend.canData[5] = 0x00;
+				canDataSend.canData[6] = 0x00;
+				canDataSend.canData[7] = 0x00;
+				CanMsgSend(&canDataSend);
+				HAL_Delay(10);
+			}
+			static int32_t ch_velocity = 0;
+			//if (motor1_speed) { //(l_current_move_comm == MOVE_FORW) {
+			//HAL_UART_Transmit(&DEBUG_UART, (uint8_t*)"can_send\r\n", 10, 100);
+			canDataSend.canData[0] = 0x23;
+			canDataSend.canData[1] = 0x00;
+			canDataSend.canData[2] = 0x20;
+			canDataSend.canData[3] = 0x01;
+			ch_velocity = motor_speed;
+			canDataSend.canData[4] = ch_velocity >> 24;
+			canDataSend.canData[5] = ch_velocity >> 16;
+			canDataSend.canData[6] = ch_velocity >> 8;
+			canDataSend.canData[7] = ch_velocity;
+			CanMsgSend(&canDataSend);
+			HAL_Delay(2);
+			//}
+			//else if (motor2_speed) {
+			canDataSend.canData[0] = 0x23;
+			canDataSend.canData[1] = 0x00;
+			canDataSend.canData[2] = 0x20;
+			canDataSend.canData[3] = 0x02;
+			ch_velocity = motor_speed;
+			canDataSend.canData[4] = ch_velocity >> 24;
+			canDataSend.canData[5] = ch_velocity >> 16;
+			canDataSend.canData[6] = ch_velocity >> 8;
+			canDataSend.canData[7] = ch_velocity;
+			CanMsgSend(&canDataSend);
+			//}
+		}
+		else
+		{
+			canDataSend.canData[0] = 0x23;
+			canDataSend.canData[1] = 0x00;
+			canDataSend.canData[2] = 0x20;
+			canDataSend.canData[3] = 0x01;
+			canDataSend.canData[4] = 0x00;
+			canDataSend.canData[5] = 0x00;
+			canDataSend.canData[6] = 0x00;
+			canDataSend.canData[7] = 0x00;
+			CanMsgSend(&canDataSend);
+			HAL_Delay(10);
+			canDataSend.canData[0] = 0x23;
+			canDataSend.canData[1] = 0x00;
+			canDataSend.canData[2] = 0x20;
+			canDataSend.canData[3] = 0x02;
+			canDataSend.canData[4] = 0x00;
+			canDataSend.canData[5] = 0x00;
+			canDataSend.canData[6] = 0x00;
+			canDataSend.canData[7] = 0x00;
+			CanMsgSend(&canDataSend);
+			move_axis_en = 0;
+			lift_axis_en = 0;
+		}
+		HAL_Delay(5);
+}
 
 void get_bms_data()
 {
 	if (!bms_detected) {
-		HAL_UART_Transmit(&huart1, (uint8_t*)bms_smart_request_msg, sizeof(bms_smart_request_msg), 100);
+		//HAL_UART_Transmit(&huart1, (uint8_t*)bms_smart_request_msg, sizeof(bms_smart_request_msg), 100);
+		HAL_UART_Transmit(&huart1, (uint8_t*)bms_jbd_request_msg0, sizeof(bms_jbd_request_msg0), 100);
 		bms_detected = 1;
 	}
 	else {
@@ -213,19 +385,21 @@ void get_bms_data()
 		else HAL_UART_Transmit(&huart1, (uint8_t*)bms_jbd_request_msg0, sizeof(bms_jbd_request_msg0), 100);
 	}
 	bms_req_time = HAL_GetTick();
-	bms_err++;
-	if (bms_err>5) {
-		battery_capacity = 0;
-		bms_detected = 0;
-	}
 }
 void read_bms_uart() {
 	if (new_bms_data)
 	{
 		new_bms_data = 0;
-		bms_err = 0;
-
+		//bms_err = 0;
 		rcGetBattery();
+	}
+	if (bms_detected && batteryMsg.bms_type == BMS_NONE)
+	{
+		if (HAL_GetTick() - bms_req_time > 1000) {
+			bms_req_time = HAL_GetTick();
+			HAL_UART_Transmit(&huart1, (uint8_t*)bms_smart_request_msg, sizeof(bms_smart_request_msg), 100);
+			bms_detected = 0;
+		}
 	}
 }
 
@@ -351,6 +525,7 @@ void rcGetBattery() {
 			batteryMsg.num_of_NTC = bms_uart_buff[26];
 			batteryMsg.temp1 = ((bms_uart_buff[27] << 8) + bms_uart_buff[28]);
 			batteryMsg.temp2 = ((bms_uart_buff[29] << 8) + bms_uart_buff[30]);
+			battery_capacity = batteryMsg.capacity_percent;
 
 			HAL_UART_Transmit(&huart1, (uint8_t*)bms_jbd_request_msg1, sizeof(bms_jbd_request_msg1), 100);
 		}
@@ -396,12 +571,6 @@ void getEncoder()
 {
 	int currCounter = __HAL_TIM_GET_COUNTER(&htim4);
 	enc_idle_tick = unwrap_encoder(currCounter, &enc_prev);
-	char str [12];
-	snprintf(str, sizeof str, "%d", (int)enc_idle_tick);
-	ssd1306_Fill(Black);
-	ssd1306_SetCursor(2, 3);
-	ssd1306_WriteString(str, Font_16x26, White);
-	ssd1306_UpdateScreen();
 }
 
 void buttons_Init()
@@ -435,13 +604,19 @@ void getButton()
 		else if(key_state == 0 && !stButtons[i].long_state && (ms - stButtons[i].time_key) > 1000)
 		{
 			stButtons[i].long_state = 1;
-		  //long press
-			ssd1306_SetCursor(2, 2);
-			ssd1306_Fill(Black);
-			ssd1306_WriteString("Long", Font_16x26, White);
-			ssd1306_SetCursor(2, 30);
-			ssd1306_WriteChar((char)(i+49), Font_16x26, White);
-			ssd1306_UpdateScreen();
+			//long press
+			if (i==0)
+			{
+				curr_menu++;
+				if (curr_menu>=MENU_MAX)
+				{
+					curr_menu = 0;
+				}
+				if (start_stop)
+				{
+					start_stop = 0;
+				}
+			}
 		}
 		else if(key_state == 1 && stButtons[i].short_state && (ms - stButtons[i].time_key) > 50)
 		{
@@ -451,15 +626,148 @@ void getButton()
 		  if(!stButtons[i].long_state)
 		  {
 			//short press
-			 ssd1306_SetCursor(2, 2);
-			 ssd1306_Fill(Black);
-			 ssd1306_WriteString("Short", Font_16x26, White);
-			 ssd1306_SetCursor(2, 30);
-			 ssd1306_WriteChar((char)(i+49), Font_16x26, White);
-			 ssd1306_UpdateScreen();
+			  if (curr_menu == MENU_BMS)
+			  {
+				  if (i == 0)
+				  {
+					  get_bms_data();
+				  }
+			  }
+			  else if (curr_menu == MENU_DRIVER)
+			  {
+				  if (i == 0)
+				  {
+					  start_stop = !start_stop;
+					  if (!start_stop)
+					  {
+						  motor_speed = 0;
+					  }
+				  }
+				  else if (i == 1 && start_stop)
+				  {
+					  motor_speed += 1000;
+					  if (motor_speed>10000) motor_speed = 10000;
+				  }
+				  else if (i == 2 && start_stop)
+				  {
+					  motor_speed -= 1000;
+				  	  if (motor_speed<-10000) motor_speed = -10000;
+				  }
+			  }
 		  }
 		}
 	}
+}
+
+void menu_update()
+{
+	SSD1306_COLOR color1 = White;
+	SSD1306_COLOR color2 = White;
+	SSD1306_COLOR color3 = White;
+	if (curr_menu == MENU_ENC)
+	{
+		char str [12];
+		snprintf(str, sizeof str, "%d", (int)enc_idle_tick);
+		ssd1306_Fill(Black);
+		color1 = Black;
+		ssd1306_SetCursor(2, 18);
+		ssd1306_WriteString(str, Font_16x26, White);
+		if (enc_idle_tick == 0)
+		{
+			ssd1306_SetCursor(2, 42);
+			ssd1306_WriteString("Long press OK", Font_7x10, White);
+			ssd1306_SetCursor(2, 53);
+			ssd1306_WriteString("to select", Font_7x10, White);
+		}
+	}
+	else if (curr_menu == MENU_BMS)
+	{
+		ssd1306_Fill(Black);
+		color2 = Black;
+		if (bms_detected == 0)
+		{
+			ssd1306_SetCursor(2, 42);
+			ssd1306_WriteString("Press OK", Font_7x10, White);
+			ssd1306_SetCursor(2, 53);
+			ssd1306_WriteString("to start test", Font_7x10, White);
+		}
+		else
+		{
+			if (batteryMsg.bms_type == BMS_SMART || batteryMsg.bms_type == BMS_JBD)
+			{
+				char str [6];
+				snprintf(str, sizeof str, "%d", (int)battery_capacity);
+				ssd1306_SetCursor(2, 18);
+				ssd1306_WriteString(str, Font_16x26, White);
+				ssd1306_SetCursor(2, 45);
+				if (batteryMsg.bms_type == BMS_SMART )
+				{
+					ssd1306_WriteString("SMART", Font_11x18, White);
+				}
+				else
+				{
+					ssd1306_WriteString("JBD", Font_11x18, White);
+				}
+			}
+			else
+			{
+				ssd1306_SetCursor(2, 53);
+				ssd1306_WriteString("Reading bms data...", Font_7x10, White);
+			}
+		}
+	}
+	else if (curr_menu == MENU_DRIVER)
+	{
+		static uint8_t a = 0;
+		ssd1306_Fill(Black);
+		if (a)
+		{
+			color3 = White;
+		}
+		else
+		{
+			color3 = Black;
+		}
+		if (!start_stop)
+		{
+			ssd1306_SetCursor(2, 42);
+			ssd1306_WriteString("OK - start/stop", Font_7x10, White);
+			ssd1306_SetCursor(2, 53);
+			ssd1306_WriteString("up/down - speed", Font_7x10, White);
+			a = 0;
+		}
+		else
+		{
+			static uint32_t blink_t = 0;
+			char str_act[10] = "Activated!";
+			uint32_t ms = HAL_GetTick();
+			char str [12];
+			snprintf(str, sizeof str, "%d", (int)motor_speed/20);
+			ssd1306_SetCursor(2, 18);
+			ssd1306_WriteString(str, Font_16x26, White);
+			ssd1306_SetCursor(2, 45);
+			if (a)
+			{
+				ssd1306_WriteString(str_act, Font_11x18, White);
+			}
+			else
+			{
+				ssd1306_WriteString(str_act, Font_11x18, Black);
+			}
+			if (ms - blink_t > 100)
+			{
+				a = !a;
+				blink_t = HAL_GetTick();
+			}
+		}
+	}
+	ssd1306_SetCursor(2, 1);
+	ssd1306_WriteString("Encoder", Font_7x10, color1);
+	ssd1306_SetCursor(55, 1);
+	ssd1306_WriteString("BMS", Font_7x10, color2);
+	ssd1306_SetCursor(80, 1);
+	ssd1306_WriteString("Driver", Font_7x10, color3);
+	ssd1306_UpdateScreen();
 }
 /* USER CODE END 0 */
 
@@ -497,6 +805,8 @@ int main(void)
   MX_CAN_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  HAL_UARTEx_ReceiveToIdle_DMA(&huart1, bms_uart_buff, sizeof(bms_uart_buff));
+  __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
   HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
   ssd1306_Init();
   buttons_Init();
@@ -512,19 +822,20 @@ int main(void)
   while (1)
   {
 	  getButton();
-	  getEncoder();
-	  /*
-		ssd1306_SetCursor(2, 2);
-		ssd1306_Fill(Black);
-		ssd1306_WriteString("Start...", Font_16x26, White);
-		ssd1306_UpdateScreen();
-		HAL_Delay(1500);
-		ssd1306_SetCursor(2, 20);
-		ssd1306_Fill(Black);
-		ssd1306_WriteString("Stop...", Font_16x26, White);
-		ssd1306_UpdateScreen();
-		HAL_Delay(1500);
-	*/
+	  if(curr_menu == MENU_ENC)
+	  {
+		  getEncoder();
+	  }
+	  else if (curr_menu == MENU_BMS)
+	  {
+		  read_bms_uart();
+	  }
+	  else if (curr_menu == MENU_DRIVER)
+	  {
+		  Moving();
+	  }
+	  menu_update();
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -580,7 +891,7 @@ static void MX_CAN_Init(void)
 {
 
   /* USER CODE BEGIN CAN_Init 0 */
-
+	CAN_FilterTypeDef  sFilterConfig;
   /* USER CODE END CAN_Init 0 */
 
   /* USER CODE BEGIN CAN_Init 1 */
@@ -603,7 +914,29 @@ static void MX_CAN_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN CAN_Init 2 */
+  	  sFilterConfig.FilterBank = 0;
+      sFilterConfig.FilterMode = CAN_FILTERMODE_IDMASK;
+      sFilterConfig.FilterScale = CAN_FILTERSCALE_32BIT;
+      sFilterConfig.FilterIdHigh = 0x0000;
+      sFilterConfig.FilterIdLow = 0x0000;
+      sFilterConfig.FilterMaskIdHigh = 0x0000;
+      sFilterConfig.FilterMaskIdLow = 0x0000;
+      sFilterConfig.FilterFIFOAssignment = CAN_RX_FIFO0;
+      sFilterConfig.FilterActivation = ENABLE;
+      //sFilterConfig.SlaveStartFilterBank = 14;
 
+      if(HAL_CAN_ConfigFilter(&hcan, &sFilterConfig) != HAL_OK)
+      {
+      	Error_Handler();
+      }
+      if (HAL_CAN_Start(&hcan) != HAL_OK) {
+    	Error_Handler();
+      }
+      if (HAL_CAN_ActivateNotification(&hcan,
+    		  CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_ERROR | CAN_IT_BUSOFF
+			  	  | CAN_IT_LAST_ERROR_CODE) != HAL_OK) {
+    	Error_Handler();
+      }
   /* USER CODE END CAN_Init 2 */
 
 }
@@ -711,7 +1044,7 @@ static void MX_USART1_UART_Init(void)
 
   /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
+  huart1.Init.BaudRate = 9600;
   huart1.Init.WordLength = UART_WORDLENGTH_8B;
   huart1.Init.StopBits = UART_STOPBITS_1;
   huart1.Init.Parity = UART_PARITY_NONE;
