@@ -4,6 +4,7 @@
 "./Core/Src/syscalls.o"
 "./Core/Src/sysmem.o"
 "./Core/Src/system_stm32f1xx.o"
+"./Core/Src/printf/printf.o"
 "./Core/Src/ssd1306/ssd1306.o"
 "./Core/Src/ssd1306/ssd1306_fonts.o"
 "./Core/Src/ssd1306/ssd1306_tests.o"

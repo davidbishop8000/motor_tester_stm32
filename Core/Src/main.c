@@ -23,7 +23,8 @@
 /* USER CODE BEGIN Includes */
 #include "ssd1306/ssd1306.h"
 #include "ssd1306/ssd1306_tests.h"
-#include <stdbool.h>
+#include "printf/printf.h"
+//#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -70,9 +71,10 @@ static void MX_CAN_Init(void);
 
 uint8_t bms_uart_buff[100];
 uint8_t new_bms_data = 0;
+uint16_t data_size = 0;
+uint8_t smart_buff[100];
+int size_recv_buff = 0;
 
-uint8_t bms_detected = 0;
-uint8_t smart_bms = 0;
 
 uint8_t bms_jbd_request_msg0[] = {0xDD, 0xA5, 0x03, 0x00, 0xFF, 0xFD, 0x77};
 uint8_t bms_jbd_request_msg1[] = {0xDD, 0xA5, 0x04, 0x00, 0xFF, 0xFC, 0x77};
@@ -80,6 +82,8 @@ uint8_t bms_smart_request_msg[]  = {0xA5, 0x40, 0x90, 0x08, 0x00, 0x00, 0x00, 0x
 uint32_t bms_req_time = 0;
 int32_t battery_capacity = 0;
 uint8_t bms_err = 0;
+int32_t check_bms_i = 0;
+int32_t screen_bms = 0;
 
 int32_t start_stop = 0;
 int32_t motor_speed = 0;
@@ -239,6 +243,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
 	if (huart->Instance == USART1) {
 		new_bms_data = 1;
+		data_size = Size;
 		HAL_UARTEx_ReceiveToIdle_DMA(&huart1, bms_uart_buff, sizeof(bms_uart_buff));
 		__HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
 	}
@@ -373,73 +378,66 @@ void Moving() {
 		HAL_Delay(5);
 }
 
-void get_bms_data()
-{
-	if (!bms_detected) {
-		RE_DE_ON;
-		//HAL_UART_Transmit(&huart1, (uint8_t*)bms_smart_request_msg, sizeof(bms_smart_request_msg), 100);
-		HAL_UART_Transmit(&huart1, (uint8_t*)bms_jbd_request_msg0, sizeof(bms_jbd_request_msg0), 100);
-		RE_DE_OFF;
-		bms_detected = 1;
-	}
-	else {
-		if (smart_bms)
-		{
-			RE_DE_ON;
-			HAL_UART_Transmit(&huart1, (uint8_t*)bms_smart_request_msg, sizeof(bms_smart_request_msg), 100);
-			RE_DE_OFF;
-		}
-		else
-		{
-			RE_DE_ON;
-			HAL_UART_Transmit(&huart1, (uint8_t*)bms_jbd_request_msg0, sizeof(bms_jbd_request_msg0), 100);
-			RE_DE_OFF;
-		}
-	}
-	bms_req_time = HAL_GetTick();
-}
 void read_bms_uart() {
 	if (new_bms_data)
 	{
 		new_bms_data = 0;
-		//bms_err = 0;
 		rcGetBattery();
-		bms_detected = 1;
+		check_bms_i = 3;
 		bms_req_time = HAL_GetTick();
 	}
-	if (bms_detected == 1 && batteryMsg.bms_type == BMS_NONE)
+	if (check_bms_i == 0)
 	{
-		if (HAL_GetTick() - bms_req_time > 1000) {
-			bms_req_time = HAL_GetTick();
+		RE_DE_ON;
+		HAL_UART_Transmit(&huart1, (uint8_t*)bms_jbd_request_msg0, sizeof(bms_jbd_request_msg0), 100);
+		RE_DE_OFF;
+		check_bms_i++;
+		bms_req_time = HAL_GetTick();
+	}
+	else if (check_bms_i == 1 && batteryMsg.bms_type == BMS_NONE)
+	{
+		if (HAL_GetTick() - bms_req_time > 500) {
+			bms_smart_request_msg[2] = 0x90;
+			bms_smart_request_msg[4] = 0x00;
+			bms_smart_request_msg[12] = 0x7D;
 			RE_DE_ON;
 			HAL_UART_Transmit(&huart1, (uint8_t*)bms_smart_request_msg, sizeof(bms_smart_request_msg), 100);
 			RE_DE_OFF;
-			bms_detected++;
+			check_bms_i++;
+			bms_req_time = HAL_GetTick();
 		}
 	}
-	else if (bms_detected == 2 && batteryMsg.bms_type == BMS_NONE)
+	else if (check_bms_i == 2 && batteryMsg.bms_type == BMS_NONE)
 	{
 		if (HAL_GetTick() - bms_req_time > 1000) {
 			bms_req_time = HAL_GetTick();
-			bms_detected = 3;
+			check_bms_i = 3;
 		}
 	}
 }
 
 void rcGetBattery() {
-	if (bms_uart_buff[0] == 0xDD) smart_bms = 0;
-	else if (bms_uart_buff[0] == 0xA5) smart_bms = 1;
-	if (smart_bms)
+	if (batteryMsg.bms_type == BMS_NONE)
+	{
+		if (bms_uart_buff[0] == 0xDD) batteryMsg.bms_type = BMS_JBD;
+		else if (bms_uart_buff[0] == 0xA5) batteryMsg.bms_type = BMS_SMART;
+	}
+	if (batteryMsg.bms_type == BMS_SMART)
 	{
 		uint8_t battery_comm = bms_uart_buff[2];
 		if (battery_comm == 0x90)
 		{
-			batteryMsg.bms_type = BMS_SMART;
-
 			batteryMsg.voltage = (bms_uart_buff[4] << 8) + bms_uart_buff[5];
 			batteryMsg.current = (bms_uart_buff[8] << 8) + bms_uart_buff[9];
 			batteryMsg.capacity_percent = (bms_uart_buff[10] << 8) + bms_uart_buff[11];
 			battery_capacity = batteryMsg.capacity_percent/10;
+			bms_smart_request_msg[2] = 0x95;
+			bms_smart_request_msg[12] = 0x82;
+			size_recv_buff = 0;
+			HAL_Delay(50);
+			RE_DE_ON;
+			HAL_UART_Transmit(&huart1, (uint8_t*)bms_smart_request_msg, sizeof(bms_smart_request_msg), 100);
+			RE_DE_OFF;
 		}
 		else if (battery_comm == 0x91)
 		{
@@ -459,8 +457,35 @@ void rcGetBattery() {
 			batteryMsg.num_of_battery = bms_uart_buff[4];
 			batteryMsg.num_of_NTC = bms_uart_buff[5];
 		}
-		else if (battery_comm == 0x95)
+		else// if (battery_comm == 0x95)
 		{
+			int rc = 0;
+			for (int i=size_recv_buff;i<(data_size+size_recv_buff);i++)
+			{
+				smart_buff[i] = bms_uart_buff[rc];
+				rc++;
+			}
+			size_recv_buff += data_size;
+			if (size_recv_buff == 78)
+			{
+				batteryMsg.cell_0 = (bms_uart_buff[5] << 8) + bms_uart_buff[6];
+				batteryMsg.cell_1 = (smart_buff[7] << 8) + smart_buff[8];
+				batteryMsg.cell_2 = (smart_buff[9] << 8) + smart_buff[10];
+				batteryMsg.cell_3 = (smart_buff[5+13] << 8) + smart_buff[(6+13)];
+				batteryMsg.cell_4 = (smart_buff[(7+13)] << 8) + smart_buff[(8+13)];
+				batteryMsg.cell_5 = (smart_buff[9+13] << 8) + smart_buff[10+13];
+				batteryMsg.cell_6 = (smart_buff[5+13*2] << 8) + smart_buff[6+13*2];
+				batteryMsg.cell_7 = (smart_buff[7+13*2] << 8) + smart_buff[8+13*2];
+				batteryMsg.cell_8 = (smart_buff[9+13*2] << 8) + smart_buff[10+13*2];
+				batteryMsg.cell_9 = (smart_buff[5+13*3] << 8) + smart_buff[6+13*3];
+				batteryMsg.cell_10 = (smart_buff[7+13*3] << 8) + smart_buff[8+13*3];
+				batteryMsg.cell_11 = (smart_buff[9+13*3] << 8) + smart_buff[10+13*3];
+				batteryMsg.cell_12 = (smart_buff[5+13*4] << 8) + smart_buff[6+13*4];
+				batteryMsg.cell_13 = (smart_buff[7+13*4] << 8) + smart_buff[8+13*4];
+				batteryMsg.cell_14 = (smart_buff[9+13*4] << 8) + smart_buff[10+13*4];
+				batteryMsg.cell_15 = (smart_buff[5+13*5] << 8) + smart_buff[6+13*5];
+			}
+			/*
 			if (bms_uart_buff[4] == 0x01)
 			{
 				batteryMsg.cell_0 = (bms_uart_buff[5] << 8) + bms_uart_buff[6];
@@ -472,64 +497,78 @@ void rcGetBattery() {
 				batteryMsg.cell_3 = (bms_uart_buff[5] << 8) + bms_uart_buff[6];
 				batteryMsg.cell_4 = (bms_uart_buff[7] << 8) + bms_uart_buff[8];
 				batteryMsg.cell_5 = (bms_uart_buff[9] << 8) + bms_uart_buff[10];
-				//batteryMsg.cell_3 = (bms_uart_buff[18] << 8) + bms_uart_buff[19];
-				//batteryMsg.cell_4 = (bms_uart_buff[20] << 8) + bms_uart_buff[21];
-				//batteryMsg.cell_5 = (bms_uart_buff[22] << 8) + bms_uart_buff[23];
 			}
 			else if (bms_uart_buff[4] == 0x03)
 			{
 				batteryMsg.cell_6 = (bms_uart_buff[5] << 8) + bms_uart_buff[6];
 				batteryMsg.cell_7 = (bms_uart_buff[7] << 8) + bms_uart_buff[8];
 				batteryMsg.cell_8 = (bms_uart_buff[9] << 8) + bms_uart_buff[10];
-				//batteryMsg.cell_6 = (bms_uart_buff[27] << 8) + bms_uart_buff[28];
-				//batteryMsg.cell_7 = (bms_uart_buff[29] << 8) + bms_uart_buff[30];
-				//batteryMsg.cell_8 = (bms_uart_buff[31] << 8) + bms_uart_buff[32];
 			}
 			else if (bms_uart_buff[4] == 0x04)
 			{
 				batteryMsg.cell_9 = (bms_uart_buff[5] << 8) + bms_uart_buff[6];
 				batteryMsg.cell_10 = (bms_uart_buff[7] << 8) + bms_uart_buff[8];
 				batteryMsg.cell_11 = (bms_uart_buff[9] << 8) + bms_uart_buff[10];
-				//batteryMsg.cell_9 = (bms_uart_buff[34] << 8) + bms_uart_buff[35];
-				//batteryMsg.cell_10 = (bms_uart_buff[36] << 8) + bms_uart_buff[37];
-				//batteryMsg.cell_11 = (bms_uart_buff[38] << 8) + bms_uart_buff[39];
 			}
 			else if (bms_uart_buff[4] == 0x05)
 			{
 				batteryMsg.cell_12 = (bms_uart_buff[5] << 8) + bms_uart_buff[6];
 				batteryMsg.cell_13 = (bms_uart_buff[7] << 8) + bms_uart_buff[8];
 				batteryMsg.cell_14 = (bms_uart_buff[9] << 8) + bms_uart_buff[10];
-				//batteryMsg.cell_12 = (bms_uart_buff[40] << 8) + bms_uart_buff[41];
-				//batteryMsg.cell_13 = (bms_uart_buff[42] << 8) + bms_uart_buff[43];
-				//batteryMsg.cell_14 = (bms_uart_buff[44] << 8) + bms_uart_buff[45];
 			}
 			else if (bms_uart_buff[4] == 0x06)
 			{
 				batteryMsg.cell_15 = (bms_uart_buff[5] << 8) + bms_uart_buff[6];
-				//batteryMsg.cell_15 = (bms_uart_buff[47] << 8) + bms_uart_buff[48];
+				//bms_smart_request_msg[2]++;
+				//bms_smart_request_msg[12]++;
 			}
-			bms_smart_request_msg[2] = 0x95;
-			bms_smart_request_msg[12] = 0x82;
+			uint16_t *p_cell = &batteryMsg.cell_0;
+			uint16_t cell_volt;
+			int err = 0;
+			for (int i=0;i<16;i++)
+			{
+				cell_volt = *p_cell;
+				if (cell_volt == 0)
+				{
+					err = 1;
+				}
+				p_cell++;
+			}
+			if (err)
+			{
+				HAL_Delay(10);
+				RE_DE_ON;
+				HAL_UART_Transmit(&huart1, (uint8_t*)bms_smart_request_msg, sizeof(bms_smart_request_msg), 100);
+				RE_DE_OFF;
+			}*/
 		}
-		else if (battery_comm == 0x96)
+		/*else if (battery_comm == 0x96)
 		{
 			batteryMsg.temp1 = bms_uart_buff[5]; //-40 to convert
 			batteryMsg.temp2 = bms_uart_buff[6];
-		}
-		bms_smart_request_msg[2]++;
-		bms_smart_request_msg[12]++;
-		if (bms_smart_request_msg[2] > 0x96)
+		}*/
+		/*if (bms_smart_request_msg[2] > 0x96)
 		{
-			bms_smart_request_msg[2] = 0x90;
-			bms_smart_request_msg[12] = 0x7D;
+			//bms_smart_request_msg[2] = 0x90;
+			//bms_smart_request_msg[12] = 0x7D;
 		}
+		else
+		{
+			RE_DE_ON;
+			HAL_UART_Transmit(&huart1, (uint8_t*)bms_smart_request_msg, sizeof(bms_smart_request_msg), 100);
+			RE_DE_OFF;
+		}
+		if (battery_comm != 0x95)
+		{
+			bms_smart_request_msg[2]++;
+			bms_smart_request_msg[12]++;
+		}*/
 	}
-	else
+	else if (batteryMsg.bms_type == BMS_JBD)
 	{
 		uint8_t battery_comm = bms_uart_buff[1];
 		if (battery_comm == 0x03)
 		{
-			batteryMsg.bms_type = BMS_JBD;
 			batteryMsg.voltage = (bms_uart_buff[4] << 8) + bms_uart_buff[5];
 			//batteryMsg.current = 65536 - ((bms_uart_buff[6] << 8) + bms_uart_buff[7]);
 			//if (bms_uart_buff[6] & (1 << 8)) batteryMsg.current = -batteryMsg.current;
@@ -574,6 +613,10 @@ void rcGetBattery() {
 			batteryMsg.cell_15 = (bms_uart_buff[34] << 8) + bms_uart_buff[35];
 		}
 	}
+	/*for (int i = 0; i < sizeof bms_uart_buff; i++)
+	{
+		bms_uart_buff[0] = 0;
+	}*/
 }
 
 int32_t unwrap_encoder(uint16_t in, int32_t *prev)
@@ -640,6 +683,8 @@ void getButton()
 				{
 					start_stop = 0;
 				}
+				check_bms_i = 0;
+				batteryMsg.bms_type = BMS_NONE;
 			}
 		}
 		else if(key_state == 1 && stButtons[i].short_state && (ms - stButtons[i].time_key) > 50)
@@ -654,10 +699,32 @@ void getButton()
 			  {
 				  if (i == 0)
 				  {
-					  bms_detected = 0;
+					  check_bms_i = 0;
 					  batteryMsg.bms_type = BMS_NONE;
-					  bms_req_time = HAL_GetTick();
-					  get_bms_data();
+					  screen_bms = 0;
+					  uint16_t* p_cell = &batteryMsg.cell_0;
+					  for (int i=0; i<16; i++)
+					  {
+						  *p_cell = 0;
+						  p_cell++;
+					  }
+				  }
+				  else if (i == 1)
+				  {
+					  screen_bms--;
+					  if (screen_bms < 0)
+					  {
+					  	  screen_bms = 3;
+					  }
+
+				  }
+				  else if (i == 2)
+				  {
+					  screen_bms++;
+					  if (screen_bms > 3)
+					  {
+						  screen_bms = 0;
+					  }
 				  }
 			  }
 			  else if (curr_menu == MENU_DRIVER)
@@ -719,52 +786,120 @@ void menu_update()
 		}
 		*/
 	}
-	else if (curr_menu == MENU_BMS)
-	{
+	else if (curr_menu == MENU_BMS) {
 		ssd1306_Fill(Black);
 		color2 = Black;
-		if (bms_detected == 0)
-		{
-			ssd1306_SetCursor(2, 42);
-			ssd1306_WriteString("Press OK", Font_7x10, White);
-			ssd1306_SetCursor(2, 53);
-			ssd1306_WriteString("to start test", Font_7x10, White);
-		}
-		else if (bms_detected == 3)
-		{
-			ssd1306_SetCursor(2, 42);
-			ssd1306_WriteString("Error!", Font_7x10, White);
-			ssd1306_SetCursor(2, 53);
-			ssd1306_WriteString("no bms data", Font_7x10, White);
-		}
-		else
-		{
-			if (batteryMsg.bms_type == BMS_SMART || batteryMsg.bms_type == BMS_JBD)
+		if (batteryMsg.bms_type != BMS_NONE) {
+			char volt[12];
+			int x_coord = 2;
+			int y_coord = 16;
+			uint16_t* p_cell = &batteryMsg.cell_0;
+			float f_volt = 0;
+			if (screen_bms == 0)
 			{
-				char str [6];
-				snprintf(str, sizeof str, "%d", (int)battery_capacity);
+				char str[6];
+				snprintf(str, sizeof str, "%d", (int) battery_capacity);
 				ssd1306_SetCursor(2, 18);
 				ssd1306_WriteString(str, Font_16x26, White);
 				ssd1306_SetCursor(2, 45);
-				if (batteryMsg.bms_type == BMS_SMART )
-				{
+				if (batteryMsg.bms_type == BMS_SMART) {
 					ssd1306_WriteString("SMART", Font_11x18, White);
+				} else {
+					ssd1306_WriteString("JBD", Font_11x18, White);
+				}
+				char str_volt[12];
+				//snprintf(str_volt, sizeof str_volt, "%+6.*f", 2, batteryMsg.voltage);
+				if (batteryMsg.bms_type == BMS_JBD)
+				{
+					f_volt = batteryMsg.voltage/100.0;
 				}
 				else
 				{
-					ssd1306_WriteString("JBD", Font_11x18, White);
+					f_volt = batteryMsg.voltage/10.0;
 				}
-				char str_volt [8];
-				//snprintf(str_volt, sizeof str_volt, "%+6.*f", 2, batteryMsg.voltage);
-				snprintf(str_volt, sizeof str_volt, "%d %s", batteryMsg.voltage, "V");
-				ssd1306_SetCursor(90, 45);
-				ssd1306_WriteString(str_volt, Font_7x10, White);
+				snprintf(str_volt, sizeof str_volt, "%2.2fV", f_volt);
+				//sprintf(str_volt, "%.2f V", (float)batteryMsg.voltage/100.0);
+				ssd1306_SetCursor(63, 45);
+				ssd1306_WriteString(str_volt, Font_11x18, White);
+			}
+			else if (screen_bms < 3)
+			{
+				int cell_num = 0;
+				if (screen_bms == 2)
+				{
+					p_cell = &batteryMsg.cell_8;
+					cell_num = 8;
+				}
+				for (int i=0; i<8; i++)
+				{
+					if (i==4)
+					{
+						x_coord = 65;
+
+					}
+					if (i < 4)
+					{
+						y_coord = 16+12*i;
+					}
+					else
+					{
+						y_coord = 16+12*(i-4);
+					}
+					ssd1306_SetCursor(x_coord, y_coord);
+					if (i > 0 && cell_num > 0)
+					{
+						snprintf(volt, sizeof volt, "%d %.3f", (i+1+cell_num), *p_cell/1000.0);
+					}
+					else
+					{
+
+						snprintf(volt, sizeof volt, "%d  %.3f", (i+1+cell_num), *p_cell/1000.0);
+					}
+					ssd1306_WriteString(volt, Font_6x8, White);
+					p_cell++;
+				}
 			}
 			else
 			{
-				ssd1306_SetCursor(2, 53);
-				ssd1306_WriteString("Reading bms data...", Font_7x10, White);
+				p_cell = &batteryMsg.cell_0;
+				uint16_t min_volt = *p_cell;
+				uint16_t max_volt = *p_cell;
+				for (int i=1; i<16;i++)
+				{
+					uint16_t t_cell = *p_cell;
+					if (t_cell < min_volt)
+					{
+						min_volt = t_cell;
+					}
+					if (max_volt < t_cell)
+					{
+						max_volt = t_cell;
+					}
+					p_cell++;
+				}
+				ssd1306_SetCursor(2, 20);
+				snprintf(volt, sizeof volt, "Min: %.3f", min_volt/1000.0);
+				ssd1306_WriteString(volt, Font_11x18, White);
+				ssd1306_SetCursor(2, 40);
+				snprintf(volt, sizeof volt, "Max: %.3f", max_volt/1000.0);
+				ssd1306_WriteString(volt, Font_11x18, White);
 			}
+		}
+		else if (check_bms_i == 0) {
+			ssd1306_SetCursor(2, 53);
+			ssd1306_WriteString("Test", Font_7x10, White);
+		}
+		else if (check_bms_i == 1) {
+			ssd1306_SetCursor(2, 53);
+			ssd1306_WriteString("Test JBD", Font_7x10, White);
+		}
+		else if (check_bms_i == 2) {
+			ssd1306_SetCursor(2, 53);
+			ssd1306_WriteString("Test SMART", Font_7x10, White);
+		}
+		else if (check_bms_i > 2) {
+			ssd1306_SetCursor(2, 53);
+			ssd1306_WriteString("ERROR", Font_7x10, White);
 		}
 	}
 	else if (curr_menu == MENU_DRIVER)

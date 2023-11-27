@@ -27,7 +27,8 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
  ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim_ex.h \
  ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_uart.h \
  ../Core/Src/ssd1306/ssd1306.h ../Core/Src/ssd1306/ssd1306_conf.h \
- ../Core/Src/ssd1306/ssd1306_fonts.h ../Core/Src/ssd1306/ssd1306_tests.h
+ ../Core/Src/ssd1306/ssd1306_fonts.h ../Core/Src/ssd1306/ssd1306_tests.h \
+ ../Core/Src/printf/printf.h
 ../Core/Inc/main.h:
 ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal.h:
 ../Core/Inc/stm32f1xx_hal_conf.h:
@@ -60,3 +61,4 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 ../Core/Src/ssd1306/ssd1306_conf.h:
 ../Core/Src/ssd1306/ssd1306_fonts.h:
 ../Core/Src/ssd1306/ssd1306_tests.h:
+../Core/Src/printf/printf.h:

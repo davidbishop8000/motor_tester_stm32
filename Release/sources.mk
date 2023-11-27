@@ -18,7 +18,9 @@ OBJDUMP_LIST :=
 C_UPPER_DEPS := 
 S_DEPS := 
 C_DEPS := 
+OBJCOPY_BIN := 
 CC_DEPS := 
+OBJCOPY_HEX := 
 SIZE_OUTPUT := 
 C++_DEPS := 
 SU_FILES := 
@@ -32,6 +34,7 @@ CPP_DEPS :=
 # Every subdirectory with source files must be described here
 SUBDIRS := \
 Core/Src \
+Core/Src/printf \
 Core/Src/ssd1306 \
 Core/Startup \
 Drivers/STM32F1xx_HAL_Driver/Src \

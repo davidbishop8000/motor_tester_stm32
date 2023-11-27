@@ -12,6 +12,7 @@ RM := rm -rf
 -include Drivers/STM32F1xx_HAL_Driver/Src/subdir.mk
 -include Core/Startup/subdir.mk
 -include Core/Src/ssd1306/subdir.mk
+-include Core/Src/printf/subdir.mk
 -include Core/Src/subdir.mk
 -include objects.mk
 
@@ -68,6 +69,12 @@ default.size.stdout \
 OBJDUMP_LIST += \
 motor_tester_stm32.list \
 
+OBJCOPY_HEX += \
+motor_tester_stm32.hex \
+
+OBJCOPY_BIN += \
+motor_tester_stm32.bin \
+
 
 # All Target
 all: main-build
@@ -77,7 +84,7 @@ main-build: motor_tester_stm32.elf secondary-outputs
 
 # Tool invocations
 motor_tester_stm32.elf motor_tester_stm32.map: $(OBJS) $(USER_OBJS) C:\ST_proj\motor_tester_stm32\STM32F103C8TX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-g++ -o "motor_tester_stm32.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m3 -T"C:\ST_proj\motor_tester_stm32\STM32F103C8TX_FLASH.ld" --specs=nosys.specs -Wl,-Map="motor_tester_stm32.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -u _printf_float -Wl,--start-group -lc -lm -lstdc++ -lsupc++ -Wl,--end-group
+	arm-none-eabi-g++ -o "motor_tester_stm32.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m3 -T"C:\ST_proj\motor_tester_stm32\STM32F103C8TX_FLASH.ld" --specs=nosys.specs -Wl,-Map="motor_tester_stm32.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -u _printf_float -u _scanf_float -Wl,--start-group -lc -lm -lstdc++ -lsupc++ -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
@@ -91,12 +98,22 @@ motor_tester_stm32.list: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DE
 	@echo 'Finished building: $@'
 	@echo ' '
 
+motor_tester_stm32.hex: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-objcopy  -O ihex $(EXECUTABLES) "motor_tester_stm32.hex"
+	@echo 'Finished building: $@'
+	@echo ' '
+
+motor_tester_stm32.bin: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-objcopy  -O binary $(EXECUTABLES) "motor_tester_stm32.bin"
+	@echo 'Finished building: $@'
+	@echo ' '
+
 # Other Targets
 clean:
-	-$(RM) default.size.stdout motor_tester_stm32.elf motor_tester_stm32.list motor_tester_stm32.map
+	-$(RM) default.size.stdout motor_tester_stm32.bin motor_tester_stm32.elf motor_tester_stm32.hex motor_tester_stm32.list motor_tester_stm32.map
 	-@echo ' '
 
-secondary-outputs: $(SIZE_OUTPUT) $(OBJDUMP_LIST)
+secondary-outputs: $(SIZE_OUTPUT) $(OBJDUMP_LIST) $(OBJCOPY_HEX) $(OBJCOPY_BIN)
 
 fail-specified-linker-script-missing:
 	@echo 'Error: Cannot find the specified linker script. Check the linker settings in the build configuration.'
