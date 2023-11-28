@@ -790,7 +790,7 @@ void menu_update()
 		ssd1306_Fill(Black);
 		color2 = Black;
 		if (batteryMsg.bms_type != BMS_NONE) {
-			char volt[12];
+			char volt[15];
 			int x_coord = 2;
 			int y_coord = 16;
 			uint16_t* p_cell = &batteryMsg.cell_0;
@@ -798,7 +798,7 @@ void menu_update()
 			if (screen_bms == 0)
 			{
 				char str[6];
-				snprintf(str, sizeof str, "%d", (int) battery_capacity);
+				snprintf(str, sizeof str, "%d%%", (int) battery_capacity);
 				ssd1306_SetCursor(2, 18);
 				ssd1306_WriteString(str, Font_16x26, White);
 				ssd1306_SetCursor(2, 45);
@@ -877,12 +877,15 @@ void menu_update()
 					}
 					p_cell++;
 				}
-				ssd1306_SetCursor(2, 20);
+				ssd1306_SetCursor(2, 15);
 				snprintf(volt, sizeof volt, "Min: %.3f", min_volt/1000.0);
 				ssd1306_WriteString(volt, Font_11x18, White);
-				ssd1306_SetCursor(2, 40);
+				ssd1306_SetCursor(2, 34);
 				snprintf(volt, sizeof volt, "Max: %.3f", max_volt/1000.0);
 				ssd1306_WriteString(volt, Font_11x18, White);
+				ssd1306_SetCursor(2, 54);
+				snprintf(volt, sizeof volt, "Diff:   %.3f", (max_volt - min_volt)/1000.0);
+				ssd1306_WriteString(volt, Font_7x10, White);
 			}
 		}
 		else if (check_bms_i == 0) {

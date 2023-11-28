@@ -11,7 +11,7 @@
 ../Core/Src/main.c:637:6:getEncoder	8	static
 ../Core/Src/main.c:643:6:buttons_Init	0	static
 ../Core/Src/main.c:659:6:getButton	24	static
-../Core/Src/main.c:756:6:menu_update	72	static
-../Core/Src/main.c:1040:6:SystemClock_Config	72	static,ignoring_inline_asm
-../Core/Src/main.c:964:5:main	80	static,ignoring_inline_asm
-../Core/Src/main.c:1331:6:Error_Handler	0	static,ignoring_inline_asm
+../Core/Src/main.c:756:6:menu_update	80	static
+../Core/Src/main.c:1043:6:SystemClock_Config	72	static,ignoring_inline_asm
+../Core/Src/main.c:967:5:main	80	static,ignoring_inline_asm
+../Core/Src/main.c:1334:6:Error_Handler	0	static,ignoring_inline_asm
