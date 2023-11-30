@@ -375,7 +375,7 @@ void Moving() {
 			move_axis_en = 0;
 			lift_axis_en = 0;
 		}
-		HAL_Delay(5);
+		HAL_Delay(20);
 }
 
 void read_bms_uart() {

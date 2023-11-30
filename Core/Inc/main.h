@@ -73,10 +73,10 @@ void Error_Handler(void);
 #define BUTTON3_GPIO_Port GPIOB
 #define BUTTON4_Pin GPIO_PIN_15
 #define BUTTON4_GPIO_Port GPIOB
-#define RE_DE_ON HAL_GPIO_WritePin(RE_DE_GPIO_Port, RE_DE_Pin, GPIO_PIN_SET); HAL_Delay(2)
-#define RE_DE_OFF HAL_GPIO_WritePin(RE_DE_GPIO_Port, RE_DE_Pin, GPIO_PIN_RESET); HAL_Delay(1)
 
 /* USER CODE BEGIN Private defines */
+#define RE_DE_ON HAL_GPIO_WritePin(RE_DE_GPIO_Port, RE_DE_Pin, GPIO_PIN_SET); HAL_Delay(2)
+#define RE_DE_OFF HAL_GPIO_WritePin(RE_DE_GPIO_Port, RE_DE_Pin, GPIO_PIN_RESET); HAL_Delay(1)
 #define ENC_ONE_PERIOD 65536
 #define ENC_HALF_PERIOD 32768
 
